@@ -1,0 +1,14 @@
+[package]
+name = "minidesk-ui-egui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+minidesk-domain = { workspace = true }
+minidesk-config = { workspace = true }
+minidesk-app-core = { workspace = true }
+minidesk-storage = { workspace = true }
+egui = { workspace = true }
+tokio = { workspace = true }

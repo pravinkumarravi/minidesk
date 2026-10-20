@@ -1,0 +1,11 @@
+[package]
+name = "minidesk-platform-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+minidesk-domain = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+*.pdb
+*.part
+.DS_Store
+Thumbs.db
+*.log
+scratch/

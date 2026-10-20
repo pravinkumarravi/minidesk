@@ -1,0 +1,66 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/minidesk-desktop",
+    "crates/minidesk-domain",
+    "crates/minidesk-config",
+    "crates/minidesk-logging",
+    "crates/minidesk-security",
+    "crates/minidesk-protocol",
+    "crates/minidesk-storage",
+    "crates/minidesk-platform-api",
+    "crates/minidesk-app-core",
+    "crates/minidesk-ui-egui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["miniDesk Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pravinkumarravi/minidesk"
+
+[workspace.dependencies]
+# Async & Networking
+tokio = { version = "1.40", features = ["full"] }
+async-trait = "0.1"
+
+# Serialization & Protocols
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+prost = "0.13"
+bytes = "1.7"
+
+# Cryptography & Security
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+sha2 = "0.10"
+subtle = "2.6"
+zeroize = { version = "1.8", features = ["derive"] }
+
+# Storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Logging & Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# UI
+egui = "0.31"
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "wgpu"] }
+
+# Internal Crates
+minidesk-domain = { path = "crates/minidesk-domain" }
+minidesk-config = { path = "crates/minidesk-config" }
+minidesk-logging = { path = "crates/minidesk-logging" }
+minidesk-security = { path = "crates/minidesk-security" }
+minidesk-protocol = { path = "crates/minidesk-protocol" }
+minidesk-storage = { path = "crates/minidesk-storage" }
+minidesk-platform-api = { path = "crates/minidesk-platform-api" }
+minidesk-app-core = { path = "crates/minidesk-app-core" }
+minidesk-ui-egui = { path = "crates/minidesk-ui-egui" }
