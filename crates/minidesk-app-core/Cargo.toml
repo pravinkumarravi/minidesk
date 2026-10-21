@@ -14,6 +14,8 @@ minidesk-storage = { workspace = true }
 minidesk-platform-api = { workspace = true }
 minidesk-transport = { workspace = true }
 minidesk-codecs = { workspace = true }
+minidesk-file-transfer = { workspace = true }
+minidesk-clipboard = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

@@ -215,6 +215,11 @@ impl ClientSession {
         self.framed.write_message(&Message::Input(input)).await
     }
 
+    /// Send any message to host.
+    pub async fn send_message(&mut self, msg: &Message) -> Result<(), TransportError> {
+        self.framed.write_message(msg).await
+    }
+
     /// Decode received video frame into raw RGBA image.
     pub fn decode_video_frame(
         &mut self,

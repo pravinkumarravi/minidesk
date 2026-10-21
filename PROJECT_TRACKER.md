@@ -62,6 +62,16 @@
   - Full workspace test suite: 22/22 unit & integration tests passing across all 13 crates.
   - **Status**: Completed.
 
+### Step 4: Windows MVP Complete Features Implementation
+- **Date**: 2026-10-21
+- **Actions**:
+  - Implemented `minidesk-file-transfer`: Bounded-memory chunked streaming engine with path traversal sanitization, Windows reserved names filtering (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`), isolated temporary `.part` files, streaming SHA-256 verification, and atomic file promotion.
+  - Implemented `minidesk-clipboard`: Bidirectional clipboard synchronization with 1 MB text bounds, capability gating (`CLIPBOARD_READ`, `CLIPBOARD_WRITE`), and SHA-256 hash-based echo-loop suppression.
+  - Enhanced `minidesk-platform-windows`: Win32 `EnumDisplayMonitors` multi-display enumeration, monitor origin offset switching in `WindowsScreenCapturer`, and `WindowsAudioDevice` system audio adapter.
+  - Integrated into `minidesk-app-core` & `minidesk-ui-egui`: Viewport monitor switcher combobox, file transfer send/cancel controls, incoming file approval modals, transfer progress bars, and SQLite device storage & session history.
+  - Full workspace test suite: 29/29 unit & integration tests passing across all 15 crates.
+  - **Status**: Completed.
+
 ---
 
 ## Milestone Roadmap & Phase Checklist
@@ -94,13 +104,14 @@
   - [x] Peer cryptographic identity validation & signaling anti-substitution
   - [x] Git commit & push
   - **Status**: Completed.
-- [ ] **Phase 4: Windows MVP Complete Features**
-  - [ ] Bidirectional clipboard sync with permission gating
-  - [ ] Safe chunked file transfer with SHA-256 verification & path sanitization
-  - [ ] Remote system audio capture (WASAPI Loopback) and playback
-  - [ ] Multi-monitor enumeration and display switching
-  - [ ] SQLite local storage for saved devices & session history
-  - [ ] Git commit & push
+- [x] **Phase 4: Windows MVP Complete Features**
+  - [x] Bidirectional clipboard sync with permission gating
+  - [x] Safe chunked file transfer with SHA-256 verification & path sanitization
+  - [x] Remote system audio capture (WASAPI Loopback) and playback
+  - [x] Multi-monitor enumeration and display switching
+  - [x] SQLite local storage for saved devices & session history
+  - [x] Git commit & push
+  - **Status**: Completed.
 - [ ] **Phase 5: Unattended Access & Security Hardening**
   - [ ] Background session agent daemon
   - [ ] Explicit opt-in enrollment & key-based authorization

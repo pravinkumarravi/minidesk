@@ -14,6 +14,8 @@ members = [
     "crates/minidesk-codecs",
     "crates/minidesk-transport",
     "crates/minidesk-signaling-client",
+    "crates/minidesk-file-transfer",
+    "crates/minidesk-clipboard",
     "crates/minidesk-app-core",
     "crates/minidesk-ui-egui",
 ]
@@ -77,5 +79,7 @@ minidesk-platform-windows = { path = "crates/minidesk-platform-windows" }
 minidesk-codecs = { path = "crates/minidesk-codecs" }
 minidesk-transport = { path = "crates/minidesk-transport" }
 minidesk-signaling-client = { path = "crates/minidesk-signaling-client" }
+minidesk-file-transfer = { path = "crates/minidesk-file-transfer" }
+minidesk-clipboard = { path = "crates/minidesk-clipboard" }
 minidesk-app-core = { path = "crates/minidesk-app-core" }
 minidesk-ui-egui = { path = "crates/minidesk-ui-egui" }

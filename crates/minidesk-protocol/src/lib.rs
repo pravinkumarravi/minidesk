@@ -97,6 +97,9 @@ pub enum Message {
     /// File transfer coordination.
     FileTransfer(FileTransferMessage),
 
+    /// Remote audio packet stream.
+    Audio(AudioPacket),
+
     /// Display change / monitor switch request.
     SwitchMonitor {
         display_id: u32,
@@ -199,6 +202,19 @@ pub enum FileTransferMessage {
         transfer_id: u64,
         reason: String,
     },
+    /// Signal completion and request integrity verification.
+    Complete {
+        transfer_id: u64,
+    },
+}
+
+/// Remote audio packet payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioPacket {
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub timestamp_unix_ms: u64,
+    pub data: Vec<u8>,
 }
 
 /// Wire framing helper: encodes a message with a 4-byte BE length prefix.

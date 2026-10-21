@@ -1,0 +1,19 @@
+[package]
+name = "minidesk-file-transfer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+minidesk-domain = { path = "../minidesk-domain" }
+minidesk-protocol = { path = "../minidesk-protocol" }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.12"

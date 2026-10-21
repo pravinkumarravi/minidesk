@@ -1,11 +1,10 @@
-//! miniDesk UI components and presentation layer using egui.
-
 use egui::{Color32, CornerRadius, RichText, Vec2};
 use minidesk_app_core::{CoreEvent, UiCommand};
 use minidesk_domain::{
-    CapabilitySet, DeviceId, DeviceProfile, NetworkAddress, SessionId, SessionState,
+    CapabilitySet, DeviceId, DeviceProfile, DisplayInfo, NetworkAddress, SessionId, SessionState,
 };
 use minidesk_storage::SessionHistoryRecord;
+use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +47,19 @@ pub struct MiniDeskUi {
     pub remote_texture: Option<egui::TextureHandle>,
     pub latest_frame: Option<(u32, u32, Vec<u8>)>,
 
+    // Multi-monitor & Displays
+    pub available_displays: Vec<DisplayInfo>,
+    pub selected_display_id: u32,
+
+    // File Transfer
+    pub file_transfer_path_input: String,
+    pub show_file_transfer_dialog: bool,
+    pub active_file_transfers: HashMap<u64, (String, f32)>,
+    pub pending_file_transfer_request: Option<(u64, String, u64)>,
+
+    // Clipboard
+    pub last_clipboard_text: Option<String>,
+
     // Core communication channels
     pub command_sender: mpsc::UnboundedSender<UiCommand>,
     pub event_receiver: mpsc::UnboundedReceiver<CoreEvent>,
@@ -86,6 +98,13 @@ impl MiniDeskUi {
             local_listen_port: listen_port,
             remote_texture: None,
             latest_frame: None,
+            available_displays: Vec::new(),
+            selected_display_id: 0,
+            file_transfer_path_input: String::new(),
+            show_file_transfer_dialog: false,
+            active_file_transfers: HashMap::new(),
+            pending_file_transfer_request: None,
+            last_clipboard_text: None,
             command_sender,
             event_receiver,
         }
@@ -117,6 +136,37 @@ impl MiniDeskUi {
                         peer_address,
                         requested_capabilities,
                     });
+                }
+                CoreEvent::DisplaysAvailable(displays) => {
+                    self.available_displays = displays;
+                }
+                CoreEvent::ClipboardReceived(text) => {
+                    self.last_clipboard_text = Some(text);
+                    self.status_banner = Some("Clipboard synced from remote host".into());
+                }
+                CoreEvent::FileTransferRequest {
+                    transfer_id,
+                    filename,
+                    file_size_bytes,
+                } => {
+                    self.pending_file_transfer_request =
+                        Some((transfer_id, filename, file_size_bytes));
+                }
+                CoreEvent::FileTransferProgress {
+                    transfer_id,
+                    progress,
+                } => {
+                    if let Some(entry) = self.active_file_transfers.get_mut(&transfer_id) {
+                        entry.1 = progress;
+                    }
+                }
+                CoreEvent::FileTransferCompleted { transfer_id, path } => {
+                    self.active_file_transfers.remove(&transfer_id);
+                    self.status_banner = Some(format!("File saved to {}", path.display()));
+                }
+                CoreEvent::FileTransferFailed { transfer_id, error } => {
+                    self.active_file_transfers.remove(&transfer_id);
+                    self.error_banner = Some(format!("File transfer error: {}", error));
                 }
                 CoreEvent::StatusMessage(msg) => {
                     self.status_banner = Some(msg);
@@ -471,12 +521,116 @@ impl MiniDeskUi {
     fn render_active_session_tab(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("🔴 Remote Desktop Viewport");
+            ui.add_space(16.0);
+
+            // Display Monitor Switcher
+            if !self.available_displays.is_empty() {
+                let current_name = self
+                    .available_displays
+                    .iter()
+                    .find(|d| d.id == self.selected_display_id)
+                    .map(|d| d.name.clone())
+                    .unwrap_or_else(|| "Display 1".into());
+
+                egui::ComboBox::from_id_salt("display_selector")
+                    .selected_text(format!("🖥 {}", current_name))
+                    .show_ui(ui, |ui| {
+                        for disp in &self.available_displays {
+                            if ui
+                                .selectable_label(
+                                    self.selected_display_id == disp.id,
+                                    &disp.name,
+                                )
+                                .clicked()
+                            {
+                                self.selected_display_id = disp.id;
+                                let _ = self.command_sender.send(UiCommand::SwitchMonitor {
+                                    display_id: disp.id,
+                                });
+                            }
+                        }
+                    });
+            }
+
+            // File Transfer Trigger
+            if ui.button("📁 File Transfer").clicked() {
+                self.show_file_transfer_dialog = !self.show_file_transfer_dialog;
+            }
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(RichText::new("Disconnect").color(Color32::from_rgb(255, 100, 100))).clicked() {
+                if ui
+                    .button(
+                        RichText::new("Disconnect").color(Color32::from_rgb(255, 100, 100)),
+                    )
+                    .clicked()
+                {
                     let _ = self.command_sender.send(UiCommand::DisconnectSession);
                 }
             });
         });
+
+        if self.show_file_transfer_dialog {
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Send File Path:");
+                    ui.text_edit_singleline(&mut self.file_transfer_path_input);
+                    if ui.button("Send").clicked() && !self.file_transfer_path_input.is_empty() {
+                        let path = std::path::PathBuf::from(&self.file_transfer_path_input);
+                        let _ = self
+                            .command_sender
+                            .send(UiCommand::InitiateFileTransfer { path });
+                        self.file_transfer_path_input.clear();
+                        self.show_file_transfer_dialog = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.show_file_transfer_dialog = false;
+                    }
+                });
+            });
+        }
+
+        // Active file transfer progress bars
+        for (transfer_id, (name, progress)) in &self.active_file_transfers {
+            ui.horizontal(|ui| {
+                ui.label(format!("Transferring {}:", name));
+                ui.add(egui::ProgressBar::new(*progress).show_percentage());
+                if ui.button("Cancel").clicked() {
+                    let _ = self
+                        .command_sender
+                        .send(UiCommand::CancelFileTransfer { transfer_id: *transfer_id });
+                }
+            });
+        }
+
+        // Incoming file transfer prompt modal
+        if let Some((transfer_id, filename, size)) = self.pending_file_transfer_request.clone() {
+            egui::Window::new("Incoming File Transfer")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ui.ctx(), |ui| {
+                    ui.heading("Accept incoming file?");
+                    ui.label(format!("Filename: {}", filename));
+                    ui.label(format!("Size: {} bytes", size));
+                    ui.horizontal(|ui| {
+                        if ui.button(RichText::new("Accept").color(Color32::GREEN)).clicked() {
+                            let _ = self.command_sender.send(UiCommand::RespondFileTransfer {
+                                transfer_id,
+                                accept: true,
+                            });
+                            self.pending_file_transfer_request = None;
+                        }
+                        if ui.button(RichText::new("Reject").color(Color32::RED)).clicked() {
+                            let _ = self.command_sender.send(UiCommand::RespondFileTransfer {
+                                transfer_id,
+                                accept: false,
+                            });
+                            self.pending_file_transfer_request = None;
+                        }
+                    });
+                });
+        }
+
         ui.separator();
 
         if let Some(texture) = &self.remote_texture {

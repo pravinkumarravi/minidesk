@@ -1,0 +1,19 @@
+[package]
+name = "minidesk-clipboard"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+minidesk-domain = { path = "../minidesk-domain" }
+minidesk-protocol = { path = "../minidesk-protocol" }
+minidesk-platform-api = { path = "../minidesk-platform-api" }
+arboard = "3.7"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

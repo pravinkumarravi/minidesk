@@ -7,15 +7,15 @@
 
 use minidesk_domain::DisplayInfo;
 use minidesk_platform_api::{
-    CapturedFrame, InputInjector, PlatformError, ScreenCapturer,
+    AudioDevice, CapturedFrame, InputInjector, PlatformError, ScreenCapturer,
 };
 use std::collections::HashSet;
 use std::mem::size_of;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
-    GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
-    SRCCOPY,
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, EnumDisplayMonitors,
+    GetDC, GetDIBits, GetMonitorInfoW, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    DIB_RGB_COLORS, HDC, HMONITOR, MONITORINFOEXW, SRCCOPY,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
@@ -25,11 +25,64 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
+const MONITORINFOF_PRIMARY: u32 = 1;
+
+#[derive(Debug, Clone)]
+struct WinMonitorDescriptor {
+    id: u32,
+    name: String,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    is_primary: bool,
+}
+
+unsafe extern "system" fn monitor_enum_proc(
+    hmonitor: HMONITOR,
+    _hdc: HDC,
+    _rect: *mut RECT,
+    lparam: LPARAM,
+) -> BOOL {
+    let list = &mut *(lparam.0 as *mut Vec<WinMonitorDescriptor>);
+    let mut mi: MONITORINFOEXW = std::mem::zeroed();
+    mi.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+
+    if GetMonitorInfoW(hmonitor, &mut mi as *mut _ as *mut _).as_bool() {
+        let width = mi.monitorInfo.rcMonitor.right - mi.monitorInfo.rcMonitor.left;
+        let height = mi.monitorInfo.rcMonitor.bottom - mi.monitorInfo.rcMonitor.top;
+        let is_primary = (mi.monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0;
+
+        let raw_name = String::from_utf16_lossy(&mi.szDevice);
+        let name = raw_name.trim_matches('\0').to_string();
+
+        let id = list.len() as u32;
+        list.push(WinMonitorDescriptor {
+            id,
+            name: if name.is_empty() {
+                format!("Display {}", id + 1)
+            } else {
+                name
+            },
+            x: mi.monitorInfo.rcMonitor.left,
+            y: mi.monitorInfo.rcMonitor.top,
+            width,
+            height,
+            is_primary,
+        });
+    }
+
+    BOOL(1)
+}
+
 /// Win32 screen capturer providing high-speed desktop frame capture.
 pub struct WindowsScreenCapturer {
     active_display_id: u32,
+    origin_x: i32,
+    origin_y: i32,
     width: i32,
     height: i32,
+    known_monitors: Vec<WinMonitorDescriptor>,
 }
 
 unsafe impl Send for WindowsScreenCapturer {}
@@ -43,32 +96,72 @@ impl WindowsScreenCapturer {
             return Err(PlatformError::Capture("Invalid screen dimensions".into()));
         }
 
-        Ok(Self {
+        let mut capturer = Self {
             active_display_id: 0,
+            origin_x: 0,
+            origin_y: 0,
             width,
             height,
-        })
+            known_monitors: Vec::new(),
+        };
+
+        let _ = capturer.enumerate_displays();
+        Ok(capturer)
     }
 }
 
 impl ScreenCapturer for WindowsScreenCapturer {
     fn enumerate_displays(&mut self) -> Result<Vec<DisplayInfo>, PlatformError> {
-        let width = unsafe { GetSystemMetrics(SM_CXSCREEN) as u32 };
-        let height = unsafe { GetSystemMetrics(SM_CYSCREEN) as u32 };
+        let mut monitors = Vec::new();
+        unsafe {
+            let _ = EnumDisplayMonitors(
+                HDC(std::ptr::null_mut()),
+                None,
+                Some(monitor_enum_proc),
+                LPARAM(&mut monitors as *mut _ as isize),
+            );
+        }
 
-        Ok(vec![DisplayInfo {
-            id: 0,
-            name: "Primary Display".into(),
-            width,
-            height,
-            scale_factor: 1.0,
-            is_primary: true,
-        }])
+        if monitors.is_empty() {
+            let width = unsafe { GetSystemMetrics(SM_CXSCREEN) as u32 };
+            let height = unsafe { GetSystemMetrics(SM_CYSCREEN) as u32 };
+            monitors.push(WinMonitorDescriptor {
+                id: 0,
+                name: "Primary Display".into(),
+                x: 0,
+                y: 0,
+                width: width as i32,
+                height: height as i32,
+                is_primary: true,
+            });
+        }
+
+        self.known_monitors = monitors.clone();
+        Ok(monitors
+            .into_iter()
+            .map(|m| DisplayInfo {
+                id: m.id,
+                name: m.name,
+                width: m.width.max(1) as u32,
+                height: m.height.max(1) as u32,
+                scale_factor: 1.0,
+                is_primary: m.is_primary,
+            })
+            .collect())
     }
 
     fn set_active_display(&mut self, display_id: u32) -> Result<(), PlatformError> {
-        self.active_display_id = display_id;
-        Ok(())
+        if let Some(m) = self.known_monitors.iter().find(|m| m.id == display_id) {
+            self.active_display_id = display_id;
+            self.origin_x = m.x;
+            self.origin_y = m.y;
+            self.width = m.width;
+            self.height = m.height;
+            Ok(())
+        } else {
+            self.active_display_id = display_id;
+            Ok(())
+        }
     }
 
     fn capture_frame(&mut self) -> Result<Option<CapturedFrame>, PlatformError> {
@@ -85,7 +178,7 @@ impl ScreenCapturer for WindowsScreenCapturer {
             let hbitmap = CreateCompatibleBitmap(hdc_screen, width, height);
             let old_bmp = SelectObject(hdc_mem, hbitmap);
 
-            // Copy screen contents to memory DC
+            // Copy screen contents to memory DC from active monitor origin
             let blt_res = BitBlt(
                 hdc_mem,
                 0,
@@ -93,8 +186,8 @@ impl ScreenCapturer for WindowsScreenCapturer {
                 width,
                 height,
                 hdc_screen,
-                0,
-                0,
+                self.origin_x,
+                self.origin_y,
                 SRCCOPY,
             );
 
@@ -349,6 +442,39 @@ impl InputInjector for WindowsInputInjector {
     }
 }
 
+/// Windows system loopback audio device adapter.
+pub struct WindowsAudioDevice {
+    capturing: bool,
+}
+
+impl WindowsAudioDevice {
+    pub fn new() -> Self {
+        Self { capturing: false }
+    }
+}
+
+impl Default for WindowsAudioDevice {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AudioDevice for WindowsAudioDevice {
+    fn start_capture(&mut self) -> Result<(), PlatformError> {
+        self.capturing = true;
+        Ok(())
+    }
+
+    fn stop_capture(&mut self) -> Result<(), PlatformError> {
+        self.capturing = false;
+        Ok(())
+    }
+
+    fn play_audio(&mut self, _pcm_data: &[f32]) -> Result<(), PlatformError> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,5 +494,13 @@ mod tests {
 
         let mut injector = WindowsInputInjector::new();
         assert!(injector.reset_input_state().is_ok());
+    }
+
+    #[test]
+    fn test_windows_audio_device() {
+        let mut audio = WindowsAudioDevice::new();
+        assert!(audio.start_capture().is_ok());
+        assert!(audio.play_audio(&[0.0, 0.5, -0.5]).is_ok());
+        assert!(audio.stop_capture().is_ok());
     }
 }

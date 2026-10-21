@@ -3,13 +3,15 @@
 //! Manages connection lifecycles, state machine transitions, incoming session requests,
 //! capability grants, host streaming, client remote viewing, and UI event synchronization.
 
+use minidesk_clipboard::ClipboardSynchronizer;
 use minidesk_codecs::{Lz4VideoEncoder, VideoEncoder};
 use minidesk_config::AppConfig;
 use minidesk_domain::{
     CapabilitySet, DeviceId, DeviceProfile, NetworkAddress, SessionId, SessionState,
 };
+use minidesk_file_transfer::{FileReceiver, FileSender};
 use minidesk_platform_api::{InputInjector, ScreenCapturer};
-use minidesk_protocol::{InputMessage, Message};
+use minidesk_protocol::{ClipboardMessage, FileTransferMessage, InputMessage, Message};
 use minidesk_security::DeviceIdentity;
 use minidesk_storage::{SessionHistoryRecord, Storage};
 use minidesk_transport::{ClientSession, HostListener};
@@ -54,6 +56,20 @@ pub enum UiCommand {
         reason: String,
     },
     SendInput(InputMessage),
+    SendClipboard(String),
+    InitiateFileTransfer {
+        path: std::path::PathBuf,
+    },
+    RespondFileTransfer {
+        transfer_id: u64,
+        accept: bool,
+    },
+    CancelFileTransfer {
+        transfer_id: u64,
+    },
+    SwitchMonitor {
+        display_id: u32,
+    },
     DisconnectSession,
     SaveDevice(DeviceProfile),
     DeleteDevice(DeviceId),
@@ -76,6 +92,25 @@ pub enum CoreEvent {
         height: u32,
         data: Vec<u8>,
     },
+    ClipboardReceived(String),
+    FileTransferRequest {
+        transfer_id: u64,
+        filename: String,
+        file_size_bytes: u64,
+    },
+    FileTransferProgress {
+        transfer_id: u64,
+        progress: f32,
+    },
+    FileTransferCompleted {
+        transfer_id: u64,
+        path: std::path::PathBuf,
+    },
+    FileTransferFailed {
+        transfer_id: u64,
+        error: String,
+    },
+    DisplaysAvailable(Vec<minidesk_domain::DisplayInfo>),
     StatusMessage(String),
     ErrorMessage(String),
     SavedDevicesUpdated(Vec<DeviceProfile>),
@@ -101,6 +136,7 @@ pub struct AppCore {
     pub active_session: RwLock<Option<ActiveSession>>,
     pub event_sender: mpsc::UnboundedSender<CoreEvent>,
     pub client_input_sender: Mutex<Option<mpsc::UnboundedSender<InputMessage>>>,
+    pub client_msg_sender: Mutex<Option<mpsc::UnboundedSender<Message>>>,
     pub pending_approvals: Arc<Mutex<HashMap<SessionId, oneshot::Sender<bool>>>>,
 }
 
@@ -118,6 +154,7 @@ impl AppCore {
             active_session: RwLock::new(None),
             event_sender,
             client_input_sender: Mutex::new(None),
+            client_msg_sender: Mutex::new(None),
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -193,11 +230,26 @@ impl AppCore {
                             continue;
                         }
 
+                        // Initialize capturer and enumerate displays
+                        #[cfg(windows)]
+                        let mut capturer = match WindowsScreenCapturer::new() {
+                            Ok(c) => c,
+                            Err(e) => {
+                                tracing::error!("Failed to create WindowsScreenCapturer: {:?}", e);
+                                continue;
+                            }
+                        };
+
+                        #[cfg(windows)]
+                        let displays = capturer.enumerate_displays().unwrap_or_default();
+                        #[cfg(not(windows))]
+                        let displays = Vec::new();
+
                         // Send approval grant
                         if let Err(e) = framed
                             .write_message(&Message::SessionApprovalGrant {
                                 granted_capabilities: requested_caps,
-                                displays: Vec::new(),
+                                displays,
                                 active_display_id: 0,
                             })
                             .await
@@ -213,15 +265,10 @@ impl AppCore {
                         #[cfg(windows)]
                         {
                             tokio::task::spawn_blocking(move || {
-                                let mut capturer = match WindowsScreenCapturer::new() {
-                                    Ok(c) => c,
-                                    Err(e) => {
-                                        tracing::error!("Failed to create WindowsScreenCapturer: {:?}", e);
-                                        return;
-                                    }
-                                };
                                 let mut injector = WindowsInputInjector::new();
                                 let mut encoder = Lz4VideoEncoder::new();
+                                let mut clipboard_sync = ClipboardSynchronizer::new();
+                                let mut file_receiver: Option<FileReceiver> = None;
 
                                 let rt = tokio::runtime::Builder::new_current_thread()
                                     .enable_all()
@@ -230,6 +277,7 @@ impl AppCore {
 
                                 rt.block_on(async move {
                                     let mut interval = tokio::time::interval(Duration::from_millis(33)); // ~30 FPS
+                                    let mut clip_interval = tokio::time::interval(Duration::from_millis(500));
                                     loop {
                                         tokio::select! {
                                             _ = interval.tick() => {
@@ -247,6 +295,11 @@ impl AppCore {
                                                             break;
                                                         }
                                                     }
+                                                }
+                                            }
+                                            _ = clip_interval.tick() => {
+                                                if let Ok(Some(clip_msg)) = clipboard_sync.check_local_change(&requested_caps) {
+                                                    let _ = framed.write_message(&Message::Clipboard(clip_msg)).await;
                                                 }
                                             }
                                             incoming_res = framed.read_message() => {
@@ -286,6 +339,64 @@ impl AppCore {
                                                             InputMessage::ResetInputState => {
                                                                 let _ = injector.reset_input_state();
                                                             }
+                                                        }
+                                                    }
+                                                    Ok(Some(Message::SwitchMonitor { display_id })) => {
+                                                        let _ = capturer.set_active_display(display_id);
+                                                    }
+                                                    Ok(Some(Message::Clipboard(ref clip))) => {
+                                                        let _ = clipboard_sync.apply_remote(&requested_caps, clip);
+                                                    }
+                                                    Ok(Some(Message::FileTransfer(ref ft))) => {
+                                                        match ft {
+                                                            FileTransferMessage::Request { transfer_id, filename, file_size_bytes, sha256_hash } => {
+                                                                if requested_caps.contains(CapabilitySet::FILE_UPLOAD) {
+                                                                    let download_dir = std::env::current_dir().unwrap_or_default().join("downloads");
+                                                                    match FileReceiver::new(&download_dir, *transfer_id, filename, *file_size_bytes, *sha256_hash) {
+                                                                        Ok(rx) => {
+                                                                            file_receiver = Some(rx);
+                                                                            let _ = framed.write_message(&Message::FileTransfer(FileTransferMessage::Response {
+                                                                                transfer_id: *transfer_id,
+                                                                                accepted: true,
+                                                                                rejection_reason: None,
+                                                                            })).await;
+                                                                        }
+                                                                        Err(e) => {
+                                                                            let _ = framed.write_message(&Message::FileTransfer(FileTransferMessage::Response {
+                                                                                transfer_id: *transfer_id,
+                                                                                accepted: false,
+                                                                                rejection_reason: Some(e.to_string()),
+                                                                            })).await;
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            FileTransferMessage::Chunk { transfer_id, chunk_index, data } => {
+                                                                if let Some(ref mut rx) = file_receiver {
+                                                                    if rx.transfer_id == *transfer_id {
+                                                                        let _ = rx.write_chunk(*chunk_index, data);
+                                                                        let _ = framed.write_message(&Message::FileTransfer(FileTransferMessage::Ack {
+                                                                            transfer_id: *transfer_id,
+                                                                            chunk_index: *chunk_index,
+                                                                        })).await;
+                                                                    }
+                                                                }
+                                                            }
+                                                            FileTransferMessage::Complete { transfer_id } => {
+                                                                if let Some(mut rx) = file_receiver.take() {
+                                                                    if rx.transfer_id == *transfer_id {
+                                                                        let _ = rx.finalize();
+                                                                    }
+                                                                }
+                                                            }
+                                                            FileTransferMessage::Cancel { transfer_id, .. } => {
+                                                                if let Some(mut rx) = file_receiver.take() {
+                                                                    if rx.transfer_id == *transfer_id {
+                                                                        rx.abort();
+                                                                    }
+                                                                }
+                                                            }
+                                                            _ => {}
                                                         }
                                                     }
                                                     Ok(Some(Message::CloseSession { .. })) | Ok(None) | Err(_) => {
@@ -329,9 +440,65 @@ impl AppCore {
                 }
             }
             UiCommand::SendInput(input) => {
-                let sender = self.client_input_sender.lock().await;
+                let sender = self.client_msg_sender.lock().await;
                 if let Some(tx) = sender.as_ref() {
-                    let _ = tx.send(input);
+                    let _ = tx.send(Message::Input(input));
+                }
+            }
+            UiCommand::SendClipboard(text) => {
+                let sender = self.client_msg_sender.lock().await;
+                if let Some(tx) = sender.as_ref() {
+                    let _ = tx.send(Message::Clipboard(ClipboardMessage::Text(text)));
+                }
+            }
+            UiCommand::SwitchMonitor { display_id } => {
+                let sender = self.client_msg_sender.lock().await;
+                if let Some(tx) = sender.as_ref() {
+                    let _ = tx.send(Message::SwitchMonitor { display_id });
+                }
+            }
+            UiCommand::InitiateFileTransfer { path } => {
+                let sender = self.client_msg_sender.lock().await;
+                if let Some(tx) = sender.as_ref() {
+                    match FileSender::open(&path) {
+                        Ok(mut file_sender) => {
+                            let _ = tx.send(Message::FileTransfer(file_sender.request_message()));
+                            let tx_clone = tx.clone();
+                            let event_tx = self.event_sender.clone();
+                            tokio::spawn(async move {
+                                while let Ok(Some(chunk)) = file_sender.next_chunk() {
+                                    if tx_clone.send(Message::FileTransfer(chunk)).is_err() {
+                                        break;
+                                    }
+                                    tokio::time::sleep(Duration::from_millis(5)).await;
+                                }
+                                let _ = tx_clone.send(Message::FileTransfer(file_sender.complete_message()));
+                                let _ = event_tx.send(CoreEvent::StatusMessage("File upload finished".into()));
+                            });
+                        }
+                        Err(e) => {
+                            let _ = self.event_sender.send(CoreEvent::ErrorMessage(format!("Failed to open file: {}", e)));
+                        }
+                    }
+                }
+            }
+            UiCommand::RespondFileTransfer { transfer_id, accept } => {
+                let sender = self.client_msg_sender.lock().await;
+                if let Some(tx) = sender.as_ref() {
+                    let _ = tx.send(Message::FileTransfer(FileTransferMessage::Response {
+                        transfer_id,
+                        accepted: accept,
+                        rejection_reason: if accept { None } else { Some("User rejected transfer".into()) },
+                    }));
+                }
+            }
+            UiCommand::CancelFileTransfer { transfer_id } => {
+                let sender = self.client_msg_sender.lock().await;
+                if let Some(tx) = sender.as_ref() {
+                    let _ = tx.send(Message::FileTransfer(FileTransferMessage::Cancel {
+                        transfer_id,
+                        reason: "Cancelled by user".into(),
+                    }));
                 }
             }
             UiCommand::DisconnectSession => {
@@ -397,10 +564,10 @@ impl AppCore {
         let identity = Arc::clone(&self.identity);
         let sock_addr = destination.to_socket_addr();
 
-        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<InputMessage>();
+        let (msg_tx, mut msg_rx) = mpsc::unbounded_channel::<Message>();
         {
-            let mut sender_guard = self.client_input_sender.lock().await;
-            *sender_guard = Some(input_tx);
+            let mut sender_guard = self.client_msg_sender.lock().await;
+            *sender_guard = Some(msg_tx);
         }
 
         tokio::spawn(async move {
@@ -431,6 +598,9 @@ impl AppCore {
                 sock_addr, client.granted_capabilities
             )));
 
+            let mut clipboard_sync = ClipboardSynchronizer::new();
+            let mut clip_interval = tokio::time::interval(Duration::from_millis(500));
+
             loop {
                 tokio::select! {
                     msg_res = client.next_message() => {
@@ -444,6 +614,20 @@ impl AppCore {
                                     });
                                 }
                             }
+                            Ok(Some(Message::SessionApprovalGrant { displays, .. })) => {
+                                let _ = event_tx.send(CoreEvent::DisplaysAvailable(displays));
+                            }
+                            Ok(Some(Message::Clipboard(ClipboardMessage::Text(text)))) => {
+                                let _ = clipboard_sync.apply_remote(&client.granted_capabilities, &ClipboardMessage::Text(text.clone()));
+                                let _ = event_tx.send(CoreEvent::ClipboardReceived(text));
+                            }
+                            Ok(Some(Message::FileTransfer(FileTransferMessage::Request { transfer_id, filename, file_size_bytes, .. }))) => {
+                                let _ = event_tx.send(CoreEvent::FileTransferRequest {
+                                    transfer_id,
+                                    filename,
+                                    file_size_bytes,
+                                });
+                            }
                             Ok(Some(Message::CloseSession { reason })) => {
                                 let _ = event_tx.send(CoreEvent::StatusMessage(format!("Host closed session: {}", reason)));
                                 break;
@@ -454,8 +638,13 @@ impl AppCore {
                             }
                         }
                     }
-                    Some(input) = input_rx.recv() => {
-                        let _ = client.send_input(input).await;
+                    _ = clip_interval.tick() => {
+                        if let Ok(Some(clip_msg)) = clipboard_sync.check_local_change(&client.granted_capabilities) {
+                            let _ = client.send_message(&Message::Clipboard(clip_msg)).await;
+                        }
+                    }
+                    Some(msg) = msg_rx.recv() => {
+                        let _ = client.send_message(&msg).await;
                     }
                 }
             }
@@ -477,7 +666,7 @@ impl AppCore {
             let _ = self.event_sender.send(CoreEvent::StatusMessage("Session disconnected".into()));
         }
         {
-            let mut sender = self.client_input_sender.lock().await;
+            let mut sender = self.client_msg_sender.lock().await;
             *sender = None;
         }
         self.refresh_history().await?;
