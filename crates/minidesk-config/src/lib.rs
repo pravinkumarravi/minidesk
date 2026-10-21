@@ -71,6 +71,9 @@ pub struct SecurityConfig {
     /// Unattended access is explicitly disabled by default.
     pub enable_unattended_access: bool,
 
+    /// Explicitly authorized peer Ed25519 public keys permitted for unattended login.
+    pub authorized_unattended_keys: Vec<[u8; 32]>,
+
     /// Maximum capabilities allowed to be requested by remote peers.
     pub max_allowed_capabilities: CapabilitySet,
 
@@ -131,6 +134,7 @@ impl Default for AppConfig {
             security: SecurityConfig {
                 require_interactive_approval: true,
                 enable_unattended_access: false,
+                authorized_unattended_keys: Vec::new(),
                 max_allowed_capabilities: CapabilitySet::FULL_CONTROL,
                 session_idle_timeout_secs: 1800, // 30 minutes
                 allow_clipboard_sync: true,
@@ -173,6 +177,12 @@ impl AppConfig {
         if self.security.max_clipboard_bytes == 0 || self.security.max_clipboard_bytes > 64 * 1024 * 1024 {
             return Err(ConfigError::Validation(
                 "Max clipboard bytes must be between 1 and 64 MB".into(),
+            ));
+        }
+
+        if self.security.enable_unattended_access && self.security.authorized_unattended_keys.is_empty() {
+            return Err(ConfigError::Validation(
+                "Unattended access enabled without any authorized cryptographic public keys configured".into(),
             ));
         }
 
@@ -233,6 +243,18 @@ mod tests {
         config.network.listen_port = DEFAULT_PORT;
         config.media.target_fps = 300;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_unattended_access_policy() {
+        let mut config = AppConfig::default();
+        config.security.enable_unattended_access = true;
+        // Without keys, validation MUST fail
+        assert!(config.validate().is_err());
+
+        // With authorized key, validation succeeds
+        config.security.authorized_unattended_keys.push([7u8; 32]);
+        assert!(config.validate().is_ok());
     }
 
     #[test]

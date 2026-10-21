@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "apps/minidesk-desktop",
     "apps/minidesk-server",
+    "apps/minidesk-agent",
     "crates/minidesk-domain",
     "crates/minidesk-config",
     "crates/minidesk-logging",

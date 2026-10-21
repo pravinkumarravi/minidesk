@@ -80,6 +80,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+
+[[package]]
 name = "arboard"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1577,6 +1583,23 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "minidesk-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "minidesk-app-core",
+ "minidesk-config",
+ "minidesk-domain",
+ "minidesk-logging",
+ "minidesk-security",
+ "minidesk-signaling-client",
+ "minidesk-storage",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "minidesk-app-core"

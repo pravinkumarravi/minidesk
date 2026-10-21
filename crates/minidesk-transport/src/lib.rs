@@ -274,7 +274,7 @@ impl HostListener {
     /// Accepts an incoming connection and performs the challenge handshake.
     pub async fn accept_and_authenticate(
         &self,
-    ) -> Result<(FramedStream, SessionId, DeviceId, CapabilitySet), TransportError> {
+    ) -> Result<(FramedStream, SessionId, DeviceId, CapabilitySet, [u8; 32]), TransportError> {
         let (stream, _peer_addr) = self.listener.accept().await?;
         let mut framed = FramedStream::new(stream);
 
@@ -309,7 +309,7 @@ impl HostListener {
             .await?;
 
         // 3. Receive AuthenticateRequest with signature
-        let (peer_device_id, requested_caps) = match framed.read_message().await? {
+        let (peer_device_id, requested_caps, peer_pubkey) = match framed.read_message().await? {
             Some(Message::AuthenticateRequest {
                 public_key,
                 signature,
@@ -324,7 +324,7 @@ impl HostListener {
                 let device_id = verify_peer_signature(&public_key, challenge.as_bytes(), &sig_arr)
                     .map_err(|e| TransportError::Auth(format!("Signature failed: {:?}", e)))?;
 
-                (device_id, requested_capabilities)
+                (device_id, requested_capabilities, public_key)
             }
             _ => return Err(TransportError::Auth("Expected AuthenticateRequest".into())),
         };
@@ -338,7 +338,7 @@ impl HostListener {
             })
             .await?;
 
-        Ok((framed, session_id, peer_device_id, requested_caps))
+        Ok((framed, session_id, peer_device_id, requested_caps, peer_pubkey))
     }
 }
 
@@ -363,7 +363,7 @@ mod tests {
 
         // Spawn host task
         let host_task = tokio::spawn(async move {
-            let (mut framed, _session_id, peer_device_id, requested_caps) = listener
+            let (mut framed, _session_id, peer_device_id, requested_caps, _peer_pubkey) = listener
                 .accept_and_authenticate()
                 .await
                 .expect("Host accept failed");

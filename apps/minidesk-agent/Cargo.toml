@@ -1,0 +1,27 @@
+[package]
+name = "minidesk-agent"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "minidesk-agent"
+path = "src/main.rs"
+
+[dependencies]
+minidesk-domain = { workspace = true }
+minidesk-config = { workspace = true }
+minidesk-logging = { workspace = true }
+minidesk-security = { workspace = true }
+minidesk-storage = { workspace = true }
+minidesk-app-core = { workspace = true }
+minidesk-signaling-client = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.12"
+

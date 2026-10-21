@@ -190,41 +190,61 @@ impl AppCore {
 
             loop {
                 match listener.accept_and_authenticate().await {
-                    Ok((mut framed, session_id, peer_device_id, requested_caps)) => {
-                        tracing::info!(
-                            session = %session_id,
-                            peer = %peer_device_id,
-                            "Incoming peer authenticated, awaiting approval"
-                        );
+                    Ok((mut framed, session_id, peer_device_id, requested_caps, peer_pubkey)) => {
+                        let (is_unattended, authorized_keys) = {
+                            let cfg = core.config.read().await;
+                            (
+                                cfg.security.enable_unattended_access,
+                                cfg.security.authorized_unattended_keys.clone(),
+                            )
+                        };
 
-                        let (tx, rx) = oneshot::channel::<bool>();
-                        {
-                            let mut approvals = core.pending_approvals.lock().await;
-                            approvals.insert(session_id, tx);
-                        }
+                        let is_authorized_unattended =
+                            is_unattended && authorized_keys.contains(&peer_pubkey);
 
-                        let peer_address = "Direct TCP".parse::<NetworkAddress>().unwrap_or_else(|_| {
-                            NetworkAddress::new(IpAddr::V4(Ipv4Addr::LOCALHOST), None)
-                        });
+                        let approved = if is_authorized_unattended {
+                            tracing::info!(
+                                session = %session_id,
+                                peer = %peer_device_id,
+                                "Incoming peer authorized via pre-shared unattended cryptographic key"
+                            );
+                            true
+                        } else {
+                            tracing::info!(
+                                session = %session_id,
+                                peer = %peer_device_id,
+                                "Incoming peer authenticated, awaiting interactive approval"
+                            );
 
-                        let _ = core.event_sender.send(CoreEvent::IncomingSessionRequest {
-                            session_id,
-                            peer_name: format!("Peer {}", &peer_device_id.to_string()[..8]),
-                            peer_device_id: Some(peer_device_id.clone()),
-                            peer_address: peer_address.clone(),
-                            requested_capabilities: requested_caps,
-                        });
+                            let (tx, rx) = oneshot::channel::<bool>();
+                            {
+                                let mut approvals = core.pending_approvals.lock().await;
+                                approvals.insert(session_id, tx);
+                            }
 
-                        let approved = match rx.await {
-                            Ok(appr) => appr,
-                            Err(_) => false,
+                            let peer_address = "Direct TCP".parse::<NetworkAddress>().unwrap_or_else(|_| {
+                                NetworkAddress::new(IpAddr::V4(Ipv4Addr::LOCALHOST), None)
+                            });
+
+                            let _ = core.event_sender.send(CoreEvent::IncomingSessionRequest {
+                                session_id,
+                                peer_name: format!("Peer {}", &peer_device_id.to_string()[..8]),
+                                peer_device_id: Some(peer_device_id.clone()),
+                                peer_address: peer_address.clone(),
+                                requested_capabilities: requested_caps,
+                            });
+
+                            match rx.await {
+                                Ok(appr) => appr,
+                                Err(_) => false,
+                            }
                         };
 
                         if !approved {
                             tracing::info!(session = %session_id, "Session rejected by host");
                             let _ = framed
                                 .write_message(&Message::SessionRejected {
-                                    reason: "Rejected by host user".into(),
+                                    reason: "Rejected by host policy or user".into(),
                                 })
                                 .await;
                             continue;

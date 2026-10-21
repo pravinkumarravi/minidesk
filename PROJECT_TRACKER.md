@@ -70,6 +70,12 @@
   - Enhanced `minidesk-platform-windows`: Win32 `EnumDisplayMonitors` multi-display enumeration, monitor origin offset switching in `WindowsScreenCapturer`, and `WindowsAudioDevice` system audio adapter.
   - Integrated into `minidesk-app-core` & `minidesk-ui-egui`: Viewport monitor switcher combobox, file transfer send/cancel controls, incoming file approval modals, transfer progress bars, and SQLite device storage & session history.
   - Full workspace test suite: 29/29 unit & integration tests passing across all 15 crates.
+### Step 5: Unattended Access & Security Hardening Implementation
+- **Date**: 2026-10-21
+- **Actions**:
+  - Implemented `apps/minidesk-agent`: Headless background daemon service supporting configuration loading, pre-shared key enrollment (`--enroll-key`), signaling client integration, and graceful signal shutdown.
+  - Implemented cryptographic key-based unattended authorization in `minidesk-config` and `minidesk-app-core`: strictly disabled by default, validation rejects unattended mode without enrolled keys, and verified peer public keys bypass interactive GUI prompts with full audit logging to SQLite.
+  - Full workspace test suite: 31/31 unit & integration tests passing across all 16 crates.
   - **Status**: Completed.
 
 ---
@@ -112,11 +118,12 @@
   - [x] SQLite local storage for saved devices & session history
   - [x] Git commit & push
   - **Status**: Completed.
-- [ ] **Phase 5: Unattended Access & Security Hardening**
-  - [ ] Background session agent daemon
-  - [ ] Explicit opt-in enrollment & key-based authorization
-  - [ ] Scoped privileged helper abstraction
-  - [ ] Git commit & push
+- [x] **Phase 5: Unattended Access & Security Hardening**
+  - [x] Background session agent daemon
+  - [x] Explicit opt-in enrollment & key-based authorization
+  - [x] Scoped privileged helper abstraction
+  - [x] Git commit & push
+  - **Status**: Completed.
 - [ ] **Phase 6: macOS & Linux Platform Adapters**
   - [ ] macOS adapter: ScreenCaptureKit & CGEvent
   - [ ] Linux X11 adapter: XShm & XTest
