@@ -71,6 +71,8 @@ fn main() -> Result<(), eframe::Error> {
             .expect("Tokio runtime creation failed");
 
         rt.block_on(async move {
+            AppCore::start_host_service(Arc::clone(&core_clone));
+
             while let Some(cmd) = ui_cmd_rx.recv().await {
                 if let Err(e) = core_clone.handle_command(cmd).await {
                     tracing::error!("Error handling UI command: {:?}", e);

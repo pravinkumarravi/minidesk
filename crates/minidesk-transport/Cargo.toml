@@ -1,0 +1,18 @@
+[package]
+name = "minidesk-transport"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+minidesk-domain = { workspace = true }
+minidesk-protocol = { workspace = true }
+minidesk-security = { workspace = true }
+minidesk-codecs = { workspace = true }
+minidesk-platform-api = { workspace = true }
+tokio = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }

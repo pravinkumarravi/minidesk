@@ -1,0 +1,12 @@
+[package]
+name = "minidesk-codecs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+minidesk-platform-api = { workspace = true }
+lz4_flex = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

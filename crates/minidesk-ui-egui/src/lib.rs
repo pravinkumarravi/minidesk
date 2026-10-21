@@ -44,6 +44,10 @@ pub struct MiniDeskUi {
     pub local_device_name: String,
     pub local_listen_port: u16,
 
+    // Remote screen texture and frame
+    pub remote_texture: Option<egui::TextureHandle>,
+    pub latest_frame: Option<(u32, u32, Vec<u8>)>,
+
     // Core communication channels
     pub command_sender: mpsc::UnboundedSender<UiCommand>,
     pub event_receiver: mpsc::UnboundedReceiver<CoreEvent>,
@@ -80,6 +84,8 @@ impl MiniDeskUi {
             local_device_id: device_id,
             local_device_name: device_name,
             local_listen_port: listen_port,
+            remote_texture: None,
+            latest_frame: None,
             command_sender,
             event_receiver,
         }
@@ -122,6 +128,9 @@ impl MiniDeskUi {
                 CoreEvent::SavedDevicesUpdated(devices) => {
                     self.saved_devices = devices;
                 }
+                CoreEvent::FrameReceived { width, height, data } => {
+                    self.latest_frame = Some((width, height, data));
+                }
                 CoreEvent::HistoryUpdated(history) => {
                     self.session_history = history;
                 }
@@ -132,6 +141,12 @@ impl MiniDeskUi {
     /// Render the entire miniDesk desktop interface.
     pub fn render(&mut self, ctx: &egui::Context) {
         self.process_events();
+
+        if let Some((w, h, data)) = self.latest_frame.take() {
+            let color_image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &data);
+            self.remote_texture = Some(ctx.load_texture("remote_screen", color_image, egui::TextureOptions::LINEAR));
+        }
+
         self.apply_theme(ctx);
 
         // Top notification / status banner if present
@@ -464,18 +479,46 @@ impl MiniDeskUi {
         });
         ui.separator();
 
-        // Render viewport canvas area
-        let available_size = ui.available_size();
-        let (rect, _response) = ui.allocate_exact_size(available_size, egui::Sense::click_and_drag());
+        if let Some(texture) = &self.remote_texture {
+            let available_size = ui.available_size();
+            let img_size = texture.size_vec2();
+            let aspect = img_size.x / img_size.y;
+            let target_width = (available_size.y * aspect).min(available_size.x);
+            let target_height = target_width / aspect;
+            let fit_size = Vec2::new(target_width, target_height);
 
-        ui.painter().rect_filled(rect, CornerRadius::same(4), Color32::from_rgb(10, 12, 16));
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Remote Screen Stream Initialized\n(Active Video Pipe)",
-            egui::FontId::proportional(16.0),
-            Color32::from_rgb(120, 140, 170),
-        );
+            let (rect, response) = ui.allocate_exact_size(fit_size, egui::Sense::click_and_drag());
+            let mut mesh = egui::Mesh::with_texture(texture.id());
+            mesh.add_rect_with_uv(rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+            ui.painter().add(mesh);
+
+            // Forward mouse events to remote host
+            if let Some(hover_pos) = response.hover_pos() {
+                let norm_x = ((hover_pos.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
+                let norm_y = ((hover_pos.y - rect.min.y) / rect.height()).clamp(0.0, 1.0);
+                let _ = self.command_sender.send(UiCommand::SendInput(minidesk_protocol::InputMessage::MouseMove { x: norm_x, y: norm_y }));
+
+                if response.clicked_by(egui::PointerButton::Primary) {
+                    let _ = self.command_sender.send(UiCommand::SendInput(minidesk_protocol::InputMessage::MouseDown { button: minidesk_protocol::MouseButton::Left }));
+                    let _ = self.command_sender.send(UiCommand::SendInput(minidesk_protocol::InputMessage::MouseUp { button: minidesk_protocol::MouseButton::Left }));
+                } else if response.clicked_by(egui::PointerButton::Secondary) {
+                    let _ = self.command_sender.send(UiCommand::SendInput(minidesk_protocol::InputMessage::MouseDown { button: minidesk_protocol::MouseButton::Right }));
+                    let _ = self.command_sender.send(UiCommand::SendInput(minidesk_protocol::InputMessage::MouseUp { button: minidesk_protocol::MouseButton::Right }));
+                }
+            }
+        } else {
+            let available_size = ui.available_size();
+            let (rect, _response) = ui.allocate_exact_size(available_size, egui::Sense::click_and_drag());
+
+            ui.painter().rect_filled(rect, CornerRadius::same(4), Color32::from_rgb(10, 12, 16));
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Connecting Video Pipeline...\nWaiting for first frame from host",
+                egui::FontId::proportional(16.0),
+                Color32::from_rgb(120, 140, 170),
+            );
+        }
     }
 
     fn render_incoming_modal(&mut self, ctx: &egui::Context, incoming: &IncomingSessionModal) {

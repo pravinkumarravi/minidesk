@@ -1,17 +1,27 @@
 //! Application core orchestrator for miniDesk.
 //!
 //! Manages connection lifecycles, state machine transitions, incoming session requests,
-//! capability grants, and UI event synchronization.
+//! capability grants, host streaming, client remote viewing, and UI event synchronization.
 
+use minidesk_codecs::{Lz4VideoEncoder, VideoEncoder};
 use minidesk_config::AppConfig;
 use minidesk_domain::{
     CapabilitySet, DeviceId, DeviceProfile, NetworkAddress, SessionId, SessionState,
 };
+use minidesk_platform_api::{InputInjector, ScreenCapturer};
+use minidesk_protocol::{InputMessage, Message};
 use minidesk_security::DeviceIdentity;
 use minidesk_storage::{SessionHistoryRecord, Storage};
+use minidesk_transport::{ClientSession, HostListener};
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+
+#[cfg(windows)]
+use minidesk_platform_windows::{WindowsInputInjector, WindowsScreenCapturer};
 
 #[derive(Error, Debug)]
 pub enum AppCoreError {
@@ -23,6 +33,9 @@ pub enum AppCoreError {
 
     #[error("Configuration error: {0}")]
     Config(#[from] minidesk_config::ConfigError),
+
+    #[error("Transport error: {0}")]
+    Transport(#[from] minidesk_transport::TransportError),
 }
 
 /// Commands sent from the UI to the App Core.
@@ -40,6 +53,7 @@ pub enum UiCommand {
         session_id: SessionId,
         reason: String,
     },
+    SendInput(InputMessage),
     DisconnectSession,
     SaveDevice(DeviceProfile),
     DeleteDevice(DeviceId),
@@ -56,6 +70,11 @@ pub enum CoreEvent {
         peer_device_id: Option<DeviceId>,
         peer_address: NetworkAddress,
         requested_capabilities: CapabilitySet,
+    },
+    FrameReceived {
+        width: u32,
+        height: u32,
+        data: Vec<u8>,
     },
     StatusMessage(String),
     ErrorMessage(String),
@@ -81,6 +100,8 @@ pub struct AppCore {
     pub storage: Storage,
     pub active_session: RwLock<Option<ActiveSession>>,
     pub event_sender: mpsc::UnboundedSender<CoreEvent>,
+    pub client_input_sender: Mutex<Option<mpsc::UnboundedSender<InputMessage>>>,
+    pub pending_approvals: Arc<Mutex<HashMap<SessionId, oneshot::Sender<bool>>>>,
 }
 
 impl AppCore {
@@ -96,7 +117,197 @@ impl AppCore {
             storage,
             active_session: RwLock::new(None),
             event_sender,
+            client_input_sender: Mutex::new(None),
+            pending_approvals: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Starts the background host listener to accept incoming connections.
+    pub fn start_host_service(core: Arc<Self>) {
+        tokio::spawn(async move {
+            let port = {
+                let cfg = core.config.read().await;
+                cfg.network.listen_port
+            };
+
+            let listen_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+            tracing::info!("Binding host listener on {}", listen_addr);
+
+            let listener = match HostListener::bind(
+                listen_addr,
+                Arc::clone(&core.identity),
+                core.identity.device_id().to_string(),
+            )
+            .await
+            {
+                Ok(l) => l,
+                Err(e) => {
+                    tracing::error!("Failed to bind host listener: {:?}", e);
+                    let _ = core.event_sender.send(CoreEvent::ErrorMessage(format!(
+                        "Failed to bind host listener on port {}: {:?}",
+                        port, e
+                    )));
+                    return;
+                }
+            };
+
+            loop {
+                match listener.accept_and_authenticate().await {
+                    Ok((mut framed, session_id, peer_device_id, requested_caps)) => {
+                        tracing::info!(
+                            session = %session_id,
+                            peer = %peer_device_id,
+                            "Incoming peer authenticated, awaiting approval"
+                        );
+
+                        let (tx, rx) = oneshot::channel::<bool>();
+                        {
+                            let mut approvals = core.pending_approvals.lock().await;
+                            approvals.insert(session_id, tx);
+                        }
+
+                        let peer_address = "Direct TCP".parse::<NetworkAddress>().unwrap_or_else(|_| {
+                            NetworkAddress::new(IpAddr::V4(Ipv4Addr::LOCALHOST), None)
+                        });
+
+                        let _ = core.event_sender.send(CoreEvent::IncomingSessionRequest {
+                            session_id,
+                            peer_name: format!("Peer {}", &peer_device_id.to_string()[..8]),
+                            peer_device_id: Some(peer_device_id.clone()),
+                            peer_address: peer_address.clone(),
+                            requested_capabilities: requested_caps,
+                        });
+
+                        let approved = match rx.await {
+                            Ok(appr) => appr,
+                            Err(_) => false,
+                        };
+
+                        if !approved {
+                            tracing::info!(session = %session_id, "Session rejected by host");
+                            let _ = framed
+                                .write_message(&Message::SessionRejected {
+                                    reason: "Rejected by host user".into(),
+                                })
+                                .await;
+                            continue;
+                        }
+
+                        // Send approval grant
+                        if let Err(e) = framed
+                            .write_message(&Message::SessionApprovalGrant {
+                                granted_capabilities: requested_caps,
+                                displays: Vec::new(),
+                                active_display_id: 0,
+                            })
+                            .await
+                        {
+                            tracing::error!("Failed to write approval grant: {:?}", e);
+                            continue;
+                        }
+
+                        let _ = core.event_sender.send(CoreEvent::StateChanged(SessionState::Active));
+                        let _ = core.event_sender.send(CoreEvent::StatusMessage("Incoming session established".into()));
+
+                        // Host video capture & input streaming loop
+                        #[cfg(windows)]
+                        {
+                            tokio::task::spawn_blocking(move || {
+                                let mut capturer = match WindowsScreenCapturer::new() {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        tracing::error!("Failed to create WindowsScreenCapturer: {:?}", e);
+                                        return;
+                                    }
+                                };
+                                let mut injector = WindowsInputInjector::new();
+                                let mut encoder = Lz4VideoEncoder::new();
+
+                                let rt = tokio::runtime::Builder::new_current_thread()
+                                    .enable_all()
+                                    .build()
+                                    .unwrap();
+
+                                rt.block_on(async move {
+                                    let mut interval = tokio::time::interval(Duration::from_millis(33)); // ~30 FPS
+                                    loop {
+                                        tokio::select! {
+                                            _ = interval.tick() => {
+                                                if let Ok(Some(frame)) = capturer.capture_frame() {
+                                                    if let Ok(compressed) = encoder.encode(&frame) {
+                                                        let msg = Message::VideoFrame {
+                                                            width: compressed.width,
+                                                            height: compressed.height,
+                                                            format: 1, // Lz4
+                                                            is_keyframe: compressed.is_keyframe,
+                                                            timestamp_unix_ms: compressed.timestamp_unix_ms,
+                                                            payload: compressed.payload,
+                                                        };
+                                                        if framed.write_message(&msg).await.is_err() {
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            incoming_res = framed.read_message() => {
+                                                match incoming_res {
+                                                    Ok(Some(Message::Input(input))) => {
+                                                        match input {
+                                                            InputMessage::MouseMove { x, y } => {
+                                                                let _ = injector.move_cursor(x, y);
+                                                            }
+                                                            InputMessage::MouseDown { button } => {
+                                                                let btn = match button {
+                                                                    minidesk_protocol::MouseButton::Left => 0,
+                                                                    minidesk_protocol::MouseButton::Middle => 1,
+                                                                    minidesk_protocol::MouseButton::Right => 2,
+                                                                    _ => 0,
+                                                                };
+                                                                let _ = injector.mouse_button(btn, true);
+                                                            }
+                                                            InputMessage::MouseUp { button } => {
+                                                                let btn = match button {
+                                                                    minidesk_protocol::MouseButton::Left => 0,
+                                                                    minidesk_protocol::MouseButton::Middle => 1,
+                                                                    minidesk_protocol::MouseButton::Right => 2,
+                                                                    _ => 0,
+                                                                };
+                                                                let _ = injector.mouse_button(btn, false);
+                                                            }
+                                                            InputMessage::MouseScroll { delta_x, delta_y } => {
+                                                                let _ = injector.mouse_scroll(delta_x, delta_y);
+                                                            }
+                                                            InputMessage::KeyDown { key_code, .. } => {
+                                                                let _ = injector.key_event(key_code, true);
+                                                            }
+                                                            InputMessage::KeyUp { key_code, .. } => {
+                                                                let _ = injector.key_event(key_code, false);
+                                                            }
+                                                            InputMessage::ResetInputState => {
+                                                                let _ = injector.reset_input_state();
+                                                            }
+                                                        }
+                                                    }
+                                                    Ok(Some(Message::CloseSession { .. })) | Ok(None) | Err(_) => {
+                                                        break;
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let _ = injector.reset_input_state();
+                                });
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("HostListener error: {:?}", e);
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
+        });
     }
 
     /// Handles a command originating from the user interface.
@@ -105,11 +316,23 @@ impl AppCore {
             UiCommand::Connect { destination, capabilities } => {
                 self.start_connection(destination, capabilities).await?;
             }
-            UiCommand::ApproveIncoming { session_id, granted_capabilities } => {
-                self.approve_session(session_id, granted_capabilities).await?;
+            UiCommand::ApproveIncoming { session_id, granted_capabilities: _ } => {
+                let mut approvals = self.pending_approvals.lock().await;
+                if let Some(tx) = approvals.remove(&session_id) {
+                    let _ = tx.send(true);
+                }
             }
-            UiCommand::RejectIncoming { session_id, reason } => {
-                self.reject_session(session_id, reason).await?;
+            UiCommand::RejectIncoming { session_id, reason: _ } => {
+                let mut approvals = self.pending_approvals.lock().await;
+                if let Some(tx) = approvals.remove(&session_id) {
+                    let _ = tx.send(false);
+                }
+            }
+            UiCommand::SendInput(input) => {
+                let sender = self.client_input_sender.lock().await;
+                if let Some(tx) = sender.as_ref() {
+                    let _ = tx.send(input);
+                }
             }
             UiCommand::DisconnectSession => {
                 self.terminate_active_session("User requested disconnect").await?;
@@ -170,46 +393,77 @@ impl AppCore {
             capabilities,
         );
 
-        Ok(())
-    }
+        let event_tx = self.event_sender.clone();
+        let identity = Arc::clone(&self.identity);
+        let sock_addr = destination.to_socket_addr();
 
-    /// Approve an incoming connection request.
-    pub async fn approve_session(
-        &self,
-        session_id: SessionId,
-        granted_caps: CapabilitySet,
-    ) -> Result<(), AppCoreError> {
-        let mut active = self.active_session.write().await;
-        if let Some(session) = active.as_mut() {
-            if session.session_id == session_id {
-                session.state = SessionState::Active;
-                session.granted_capabilities = granted_caps;
-                let _ = self.event_sender.send(CoreEvent::StateChanged(SessionState::Active));
-                let _ = self.event_sender.send(CoreEvent::StatusMessage("Session established".into()));
-            }
+        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<InputMessage>();
+        {
+            let mut sender_guard = self.client_input_sender.lock().await;
+            *sender_guard = Some(input_tx);
         }
-        Ok(())
-    }
 
-    /// Reject an incoming connection request.
-    pub async fn reject_session(
-        &self,
-        session_id: SessionId,
-        reason: String,
-    ) -> Result<(), AppCoreError> {
-        let mut active = self.active_session.write().await;
-        if let Some(session) = active.as_mut() {
-            if session.session_id == session_id {
-                session.state = SessionState::Rejected;
-                let _ = self.event_sender.send(CoreEvent::StateChanged(SessionState::Rejected));
-                let _ = self.event_sender.send(CoreEvent::ErrorMessage(format!(
-                    "Connection rejected: {}",
-                    reason
-                )));
-                let _ = self.storage.record_session_end(&session_id, chrono_now(), &format!("Rejected: {}", reason));
+        tokio::spawn(async move {
+            let _ = event_tx.send(CoreEvent::StateChanged(SessionState::Authenticating));
+            let mut client = match ClientSession::connect(
+                sock_addr,
+                "miniDesk Client",
+                &identity,
+                capabilities,
+            )
+            .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Client connect failed: {:?}", e);
+                    let _ = event_tx.send(CoreEvent::StateChanged(SessionState::Failed));
+                    let _ = event_tx.send(CoreEvent::ErrorMessage(format!(
+                        "Connection failed: {:?}",
+                        e
+                    )));
+                    return;
+                }
+            };
+
+            let _ = event_tx.send(CoreEvent::StateChanged(SessionState::Active));
+            let _ = event_tx.send(CoreEvent::StatusMessage(format!(
+                "Connected to {} (Capabilities: {:?})",
+                sock_addr, client.granted_capabilities
+            )));
+
+            loop {
+                tokio::select! {
+                    msg_res = client.next_message() => {
+                        match msg_res {
+                            Ok(Some(Message::VideoFrame { width, height, format, is_keyframe, timestamp_unix_ms, payload })) => {
+                                if let Ok(frame) = client.decode_video_frame(width, height, format, is_keyframe, timestamp_unix_ms, payload) {
+                                    let _ = event_tx.send(CoreEvent::FrameReceived {
+                                        width: frame.width,
+                                        height: frame.height,
+                                        data: frame.data,
+                                    });
+                                }
+                            }
+                            Ok(Some(Message::CloseSession { reason })) => {
+                                let _ = event_tx.send(CoreEvent::StatusMessage(format!("Host closed session: {}", reason)));
+                                break;
+                            }
+                            Ok(Some(_)) => {}
+                            Ok(None) | Err(_) => {
+                                break;
+                            }
+                        }
+                    }
+                    Some(input) = input_rx.recv() => {
+                        let _ = client.send_input(input).await;
+                    }
+                }
             }
-        }
-        *active = None;
+
+            let _ = event_tx.send(CoreEvent::StateChanged(SessionState::Ended));
+            let _ = event_tx.send(CoreEvent::StatusMessage("Session disconnected".into()));
+        });
+
         Ok(())
     }
 
@@ -221,6 +475,10 @@ impl AppCore {
             let _ = self.storage.record_session_end(&session.session_id, chrono_now(), reason);
             let _ = self.event_sender.send(CoreEvent::StateChanged(SessionState::Ended));
             let _ = self.event_sender.send(CoreEvent::StatusMessage("Session disconnected".into()));
+        }
+        {
+            let mut sender = self.client_input_sender.lock().await;
+            *sender = None;
         }
         self.refresh_history().await?;
         Ok(())

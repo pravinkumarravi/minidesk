@@ -78,6 +78,16 @@ pub enum Message {
         reason: String,
     },
 
+    /// Real-time video frame streamed from host to viewer.
+    VideoFrame {
+        width: u32,
+        height: u32,
+        format: u8,
+        is_keyframe: bool,
+        timestamp_unix_ms: u64,
+        payload: Vec<u8>,
+    },
+
     /// Input event forwarded to the host (mouse / keyboard).
     Input(InputMessage),
 
