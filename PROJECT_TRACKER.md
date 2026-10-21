@@ -78,6 +78,14 @@
   - Full workspace test suite: 31/31 unit & integration tests passing across all 16 crates.
   - **Status**: Completed.
 
+### Step 6: macOS & Linux Platform Adapters Implementation
+- **Date**: 2026-10-21
+- **Actions**:
+  - Implemented `crates/minidesk-platform-macos`: `MacScreenCapturer` with multi-monitor enumeration and display switching, `MacInputInjector` with `reset_input_state()` hardware release safety guards, `MacAudioDevice`, and `MacSystemStatusProvider` privacy permission checks.
+  - Implemented `crates/minidesk-platform-linux`: `LinuxScreenCapturer` supporting X11 (`XShm`) and Wayland (PipeWire / XDG Desktop Portal), `LinuxInputInjector` supporting X11 (`XTest`) and Wayland (`libei`/`uinput`) with stuck-key release guards, `LinuxAudioDevice`, and runtime display server detection (`X11`, `Wayland`, `Headless`).
+  - Full workspace test suite: 38/38 unit & integration tests passing across all 18 crates.
+  - **Status**: Completed.
+
 ---
 
 ## Milestone Roadmap & Phase Checklist
@@ -124,11 +132,12 @@
   - [x] Scoped privileged helper abstraction
   - [x] Git commit & push
   - **Status**: Completed.
-- [ ] **Phase 6: macOS & Linux Platform Adapters**
-  - [ ] macOS adapter: ScreenCaptureKit & CGEvent
-  - [ ] Linux X11 adapter: XShm & XTest
-  - [ ] Linux Wayland adapter: PipeWire & XDG Desktop Portal
-  - [ ] Git commit & push
+- [x] **Phase 6: macOS & Linux Platform Adapters**
+  - [x] macOS adapter: ScreenCaptureKit & CGEvent
+  - [x] Linux X11 adapter: XShm & XTest
+  - [x] Linux Wayland adapter: PipeWire & XDG Desktop Portal
+  - [x] Git commit & push
+  - **Status**: Completed.
 - [ ] **Phase 7: Production Readiness, Packaging & Release**
   - [ ] Protocol fuzzing & security review
   - [ ] Installer generation (WiX / NSIS for Windows, DMG for macOS, AppImage/deb for Linux)

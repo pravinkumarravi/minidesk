@@ -1715,6 +1715,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "minidesk-platform-linux"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "minidesk-domain",
+ "minidesk-platform-api",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "minidesk-platform-macos"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "minidesk-domain",
+ "minidesk-platform-api",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "minidesk-platform-windows"
 version = "0.1.0"
 dependencies = [

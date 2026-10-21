@@ -12,6 +12,8 @@ members = [
     "crates/minidesk-storage",
     "crates/minidesk-platform-api",
     "crates/minidesk-platform-windows",
+    "crates/minidesk-platform-macos",
+    "crates/minidesk-platform-linux",
     "crates/minidesk-codecs",
     "crates/minidesk-transport",
     "crates/minidesk-signaling-client",
@@ -77,6 +79,8 @@ minidesk-protocol = { path = "crates/minidesk-protocol" }
 minidesk-storage = { path = "crates/minidesk-storage" }
 minidesk-platform-api = { path = "crates/minidesk-platform-api" }
 minidesk-platform-windows = { path = "crates/minidesk-platform-windows" }
+minidesk-platform-macos = { path = "crates/minidesk-platform-macos" }
+minidesk-platform-linux = { path = "crates/minidesk-platform-linux" }
 minidesk-codecs = { path = "crates/minidesk-codecs" }
 minidesk-transport = { path = "crates/minidesk-transport" }
 minidesk-signaling-client = { path = "crates/minidesk-signaling-client" }
