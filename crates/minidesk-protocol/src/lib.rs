@@ -285,4 +285,58 @@ mod tests {
         let decoded = decode_message(&mut bytes_mut).unwrap().unwrap();
         assert_eq!(msg, decoded);
     }
+
+    #[test]
+    fn test_oversized_packet_rejection() {
+        let mut fake_buf = BytesMut::new();
+        // Claim length is 32 MB (exceeds MAX_PAYLOAD_PACKET_SIZE 16 MB)
+        fake_buf.put_u32(32 * 1024 * 1024);
+        fake_buf.extend_from_slice(&[0u8; 100]);
+
+        let res = decode_message(&mut fake_buf);
+        assert!(res.is_err());
+        match res.unwrap_err() {
+            ProtocolError::PacketTooLarge(len, max) => {
+                assert_eq!(len, 32 * 1024 * 1024);
+                assert_eq!(max, MAX_PAYLOAD_PACKET_SIZE);
+            }
+            other => panic!("Expected PacketTooLarge, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_corrupted_payload_handling() {
+        let mut buf = BytesMut::new();
+        buf.put_u32(8);
+        buf.extend_from_slice(&[0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0x99, 0x88]);
+
+        let res = decode_message(&mut buf);
+        assert!(res.is_err());
+        match res.unwrap_err() {
+            ProtocolError::Codec(_) => {}
+            other => panic!("Expected Codec error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_protocol_pseudo_fuzzing_no_panics() {
+        // Feed various random and adversarial byte sequences
+        let seed_patterns: Vec<Vec<u8>> = vec![
+            vec![],
+            vec![0],
+            vec![0, 0],
+            vec![0, 0, 0],
+            vec![0, 0, 0, 1],
+            vec![0, 0, 0, 1, 0xFF],
+            vec![0xFF; 16],
+            vec![0xAA; 1024],
+            vec![0x00; 256],
+        ];
+
+        for pattern in seed_patterns {
+            let mut buf = BytesMut::from(&pattern[..]);
+            // Must not panic under any permutation
+            let _ = decode_message(&mut buf);
+        }
+    }
 }

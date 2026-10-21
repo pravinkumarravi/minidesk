@@ -1,0 +1,28 @@
+{
+  "network": {
+    "bind_address": "0.0.0.0:33890",
+    "signaling_server_url": "ws://127.0.0.1:8080/ws/signal",
+    "turn_server_url": null,
+    "connection_timeout_ms": 10000,
+    "keepalive_interval_ms": 5000
+  },
+  "security": {
+    "device_name": "Workstation-Primary",
+    "require_peer_verification": true,
+    "unattended_access_enabled": false,
+    "authorized_peer_keys": []
+  },
+  "display": {
+    "target_fps": 30,
+    "codec": "LZ4",
+    "preferred_display_id": 0,
+    "enable_audio": true
+  },
+  "capabilities": {
+    "allow_input_injection": true,
+    "allow_clipboard_read": true,
+    "allow_clipboard_write": true,
+    "allow_file_transfer": true,
+    "max_file_transfer_size_mb": 500
+  }
+}
