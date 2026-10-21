@@ -52,6 +52,14 @@
   - Integrated `minidesk-app-core`: Background host service listener on port 47823, incoming approval channels, video frame capture loops, and input message dispatch.
   - Integrated `minidesk-ui-egui`: Dynamic GPU texture updates (`remote_texture`), aspect-ratio fitted viewport, interactive consent modal, and mouse/keyboard event forwarding.
   - Tested across all 11 workspace crates: 18/18 unit & integration tests passing.
+### Step 3: Self-Hosted Internet Connectivity & Control Plane Implementation
+- **Date**: 2026-10-21
+- **Actions**:
+  - Implemented `minidesk-signaling-client`: Async WebSocket client with mutual Ed25519 authentication, message dispatch, and anti-substitution security validations.
+  - Implemented `apps/minidesk-server`: Axum REST service (`/health`, `/api/v1/auth/enroll`, `/api/v1/devices`, `/api/v1/devices/:id/revoke`, `/api/v1/turn/credentials`) and WebSocket signaling router (`/ws/signaling`).
+  - Implemented comprehensive coturn STUN/TURN deployment guidance & integration.
+  - Unit tests verified: REST enrollment, device revocation, ephemeral TURN credentials, and bidirectional Alice-to-Bob signaling routing.
+  - Full workspace test suite: 22/22 unit & integration tests passing across all 13 crates.
   - **Status**: Completed.
 
 ---
@@ -80,16 +88,12 @@
   - [x] Interactive consent & approval prompt (`IncomingSessionModal`)
   - [x] Git commit & push
   - **Status**: Completed.
-- [ ] **Phase 3: Self-Hosted Internet Connectivity & Control Plane**
-  - [ ] `minidesk-server` (Signaling, device registry, account management)
-  - [ ] ICE/STUN/TURN integration (coturn guidance)
-  - [ ] Peer cryptographic identity validation & signaling anti-substitution
-  - [ ] Git commit & push
-- [ ] **Phase 3: Self-Hosted Internet Connectivity & Control Plane**
-  - [ ] `minidesk-server` (Signaling, device registry, account management)
-  - [ ] ICE/STUN/TURN integration (coturn guidance)
-  - [ ] Peer cryptographic identity validation & signaling anti-substitution
-  - [ ] Git commit & push
+- [x] **Phase 3: Self-Hosted Internet Connectivity & Control Plane**
+  - [x] `minidesk-server` (Signaling, device registry, account management)
+  - [x] ICE/STUN/TURN integration (coturn guidance)
+  - [x] Peer cryptographic identity validation & signaling anti-substitution
+  - [x] Git commit & push
+  - **Status**: Completed.
 - [ ] **Phase 4: Windows MVP Complete Features**
   - [ ] Bidirectional clipboard sync with permission gating
   - [ ] Safe chunked file transfer with SHA-256 verification & path sanitization
@@ -111,3 +115,4 @@
   - [ ] Protocol fuzzing & security review
   - [ ] Installer generation (WiX / NSIS for Windows, DMG for macOS, AppImage/deb for Linux)
   - [ ] GitHub release tagging and asset publishing via `gh release create`
+

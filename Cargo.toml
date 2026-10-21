@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "apps/minidesk-desktop",
+    "apps/minidesk-server",
     "crates/minidesk-domain",
     "crates/minidesk-config",
     "crates/minidesk-logging",
@@ -12,6 +13,7 @@ members = [
     "crates/minidesk-platform-windows",
     "crates/minidesk-codecs",
     "crates/minidesk-transport",
+    "crates/minidesk-signaling-client",
     "crates/minidesk-app-core",
     "crates/minidesk-ui-egui",
 ]
@@ -58,6 +60,11 @@ anyhow = "1.0"
 egui = "0.31"
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "wgpu"] }
 
+# Server & WebSockets
+axum = { version = "0.7", features = ["ws"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+
 # Internal Crates
 minidesk-domain = { path = "crates/minidesk-domain" }
 minidesk-config = { path = "crates/minidesk-config" }
@@ -69,5 +76,6 @@ minidesk-platform-api = { path = "crates/minidesk-platform-api" }
 minidesk-platform-windows = { path = "crates/minidesk-platform-windows" }
 minidesk-codecs = { path = "crates/minidesk-codecs" }
 minidesk-transport = { path = "crates/minidesk-transport" }
+minidesk-signaling-client = { path = "crates/minidesk-signaling-client" }
 minidesk-app-core = { path = "crates/minidesk-app-core" }
 minidesk-ui-egui = { path = "crates/minidesk-ui-egui" }

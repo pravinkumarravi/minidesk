@@ -1,0 +1,19 @@
+[package]
+name = "minidesk-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+minidesk-domain = { workspace = true }
+minidesk-security = { workspace = true }
+minidesk-logging = { workspace = true }
+minidesk-signaling-client = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
